@@ -2,8 +2,9 @@ import type { PrismaClient, UserRole } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../../app.js";
 import { hashPassword } from "../../common/utilities/security.js";
+import type { Env } from "../../config/env.js";
 
-const testEnv = {
+const testEnv: Env = {
   NODE_ENV: "test" as const,
   PORT: 4000,
   WEB_ORIGIN: "http://localhost:3000",
@@ -14,6 +15,17 @@ const testEnv = {
   COOKIE_SECRET: "test-cookie-secret",
   ACCESS_TOKEN_EXPIRES_IN: "15m",
   REFRESH_TOKEN_EXPIRES_IN: "7d"
+};
+
+const developmentEnv = {
+  ...testEnv,
+  NODE_ENV: "development" as const
+};
+
+const productionEnv = {
+  ...testEnv,
+  NODE_ENV: "production" as const,
+  WEB_ORIGIN: "https://clinic-web-beryl-two.vercel.app"
 };
 
 type ClinicRecord = {
@@ -229,6 +241,12 @@ async function createAppWithFakePrisma() {
   return { app, prisma };
 }
 
+async function createAppWithEnv(env: Env) {
+  const prisma = createFakePrisma();
+  const app = await buildApp({ env, prisma: prisma as unknown as PrismaClient });
+  return { app, prisma };
+}
+
 async function bootstrap(app: Awaited<ReturnType<typeof buildApp>>) {
   return app.inject({
     method: "POST",
@@ -279,6 +297,67 @@ describe("phase 2 authentication and authorization", () => {
     expect(success.statusCode).toBe(200);
     expect(failure.statusCode).toBe(401);
     expect(inactive.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("uses SameSite=None and Secure for production auth cookies", async () => {
+    const { app } = await createAppWithEnv(productionEnv);
+    await bootstrap(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "Password123!" }
+    });
+    const setCookie = response.headers["set-cookie"];
+    const cookies = Array.isArray(setCookie) ? setCookie : [String(setCookie)];
+
+    expect(response.statusCode).toBe(200);
+    expect(cookies).toHaveLength(2);
+    expect(cookies.every((cookie) => cookie.includes("HttpOnly"))).toBe(true);
+    expect(cookies.every((cookie) => cookie.includes("Secure"))).toBe(true);
+    expect(cookies.every((cookie) => cookie.includes("SameSite=None"))).toBe(true);
+    await app.close();
+  });
+
+  it("uses SameSite=Lax without Secure for development auth cookies", async () => {
+    const { app } = await createAppWithEnv(developmentEnv);
+    await bootstrap(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "Password123!" }
+    });
+    const setCookie = response.headers["set-cookie"];
+    const cookies = Array.isArray(setCookie) ? setCookie : [String(setCookie)];
+
+    expect(response.statusCode).toBe(200);
+    expect(cookies).toHaveLength(2);
+    expect(cookies.every((cookie) => cookie.includes("HttpOnly"))).toBe(true);
+    expect(cookies.every((cookie) => !cookie.includes("Secure"))).toBe(true);
+    expect(cookies.every((cookie) => cookie.includes("SameSite=Lax"))).toBe(true);
+    await app.close();
+  });
+
+  it("authenticates /auth/me immediately after login with session cookies", async () => {
+    const { app } = await createAppWithFakePrisma();
+    await bootstrap(app);
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "Password123!" }
+    });
+
+    const me = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { cookie: cookieHeader(login) }
+    });
+
+    expect(login.statusCode).toBe(200);
+    expect(me.statusCode).toBe(200);
+    expect(me.json().data.user.email).toBe("admin@example.com");
     await app.close();
   });
 

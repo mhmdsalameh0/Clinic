@@ -38,10 +38,11 @@ function publicUser(user: User) {
 }
 
 function cookieOptions(env: Env, maxAgeMs: number) {
+  const isProduction = env.NODE_ENV === "production";
   return {
     httpOnly: true,
-    sameSite: "lax" as const,
-    secure: env.NODE_ENV === "production",
+    sameSite: isProduction ? "none" as const : "lax" as const,
+    secure: isProduction,
     path: "/",
     maxAge: Math.floor(maxAgeMs / 1000)
   };
