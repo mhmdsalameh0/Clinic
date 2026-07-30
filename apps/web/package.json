@@ -5,13 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm --prefix ../../packages/shared run build && next build",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@clinic/shared": "*",
+    "@clinic/shared": "file:../../packages/shared",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "next": "^15.1.4",
