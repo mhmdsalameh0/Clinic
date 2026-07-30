@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ReminderDto } from "@/lib/api-client";
 import { apiClient, ApiClientError } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/datetime";
+import { removeItem } from "@/lib/optimistic-list";
+import { useLiveRevalidation } from "@/lib/use-live-revalidation";
 
 export default function RemindersSettingsPage() {
   const [items, setItems] = useState<ReminderDto[]>([]);
@@ -11,30 +13,29 @@ export default function RemindersSettingsPage() {
   const [message, setMessage] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
 
-  async function load() {
-    setError("");
-    try {
-      const result = await apiClient.reminders();
+  const { isInitialLoading, revalidate } = useLiveRevalidation({
+    load: () => apiClient.reminders(),
+    onData: (result) => {
       setItems(result.items);
-    } catch (caught) {
-      setError(caught instanceof ApiClientError ? caught.message : "تعذر تحميل التذكيرات المجدولة");
-    }
-  }
-
-  useEffect(() => {
-    void load();
-  }, []);
+      setError("");
+    },
+    onError: (caught) => setError(caught instanceof ApiClientError ? caught.message : "تعذر تحميل التذكيرات المجدولة"),
+    deps: []
+  });
 
   async function deleteReminder(id: string) {
     if (!window.confirm("هل أنت متأكد من حذف التذكير؟ لا يمكن التراجع عن هذا الإجراء.")) return;
+    const previous = items;
     setError("");
     setMessage("");
     setPendingId(id);
+    setItems((current) => removeItem(current, id));
     try {
       await apiClient.deleteReminder(id);
       setMessage("تم حذف التذكير");
-      await load();
+      void revalidate();
     } catch (caught) {
+      setItems(previous);
       setError(caught instanceof ApiClientError ? caught.message : "تعذر حذف التذكير");
     } finally {
       setPendingId(null);
@@ -47,7 +48,8 @@ export default function RemindersSettingsPage() {
       {message ? <p className="mt-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
       {error ? <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       <div className="mt-5 space-y-3">
-        {items.length === 0 ? <p className="text-sm text-slate-500">لا توجد تذكيرات مجدولة</p> : null}
+        {isInitialLoading ? <p className="rounded-md bg-slate-100 p-4 text-sm text-slate-500">جار تحميل التذكيرات المجدولة...</p> : null}
+        {!isInitialLoading && items.length === 0 ? <p className="text-sm text-slate-500">لا توجد تذكيرات مجدولة</p> : null}
         {items.map((item) => (
           <article key={item.id} className="rounded-md border border-slate-100 bg-slate-50 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">

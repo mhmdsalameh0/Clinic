@@ -1,32 +1,33 @@
 "use client";
 
 import { Bell, CalendarClock, CalendarDays, Clock } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { AppointmentDto } from "@/lib/api-client";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, ApiClientError } from "@/lib/api-client";
 import { formatDateTime, formatTime } from "@/lib/datetime";
+import { useLiveRevalidation } from "@/lib/use-live-revalidation";
 
 export default function DashboardPage() {
   const [today, setToday] = useState<AppointmentDto[]>([]);
   const [tomorrow, setTomorrow] = useState<AppointmentDto[]>([]);
   const [next, setNext] = useState<AppointmentDto | null>(null);
   const [unread, setUnread] = useState(0);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    async function load() {
-      const [todayResult, tomorrowResult, nextResult, unreadResult] = await Promise.all([
-        apiClient.todayAppointments(),
-        apiClient.tomorrowAppointments(),
-        apiClient.nextAppointment(),
-        apiClient.unreadCount().catch(() => ({ count: 0 }))
-      ]);
-      setToday(todayResult.items);
-      setTomorrow(tomorrowResult.items);
-      setNext(nextResult.appointment);
-      setUnread(unreadResult.count);
-    }
-    void load();
-  }, []);
+  const { isInitialLoading } = useLiveRevalidation({
+    load: () => apiClient.dashboardSummary(),
+    onData: (summary) => {
+      setToday(summary.today);
+      setTomorrow(summary.tomorrow);
+      setNext(summary.nextAppointment);
+      setUnread(summary.unreadNotificationCount);
+      setError("");
+    },
+    onError: (caught) => {
+      setError(caught instanceof ApiClientError ? caught.message : "تعذر تحميل لوحة التحكم");
+    },
+    deps: []
+  });
 
   const stats = [
     { label: "مواعيد اليوم", value: today.length, icon: CalendarDays },
@@ -35,12 +36,17 @@ export default function DashboardPage() {
     { label: "تذكيرات غير مقروءة", value: unread, icon: Bell }
   ];
 
+  if (isInitialLoading) {
+    return <DashboardSkeleton />;
+  }
+
   return (
     <div className="space-y-6">
       <section>
         <h2 className="text-xl font-semibold text-slate-950">لوحة التحكم</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">كل ما يحتاجه موظف العيادة لمعرفة مواعيد اليوم والغد فوراً.</p>
       </section>
+      {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => {
           const Icon = stat.icon;
@@ -93,5 +99,20 @@ function AppointmentList({ title, items, empty, highlight = false }: { title: st
         ))}
       </div>
     </article>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="h-20 rounded-lg bg-slate-100" />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-28 rounded-lg bg-slate-100" />)}
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="h-44 rounded-lg bg-slate-100" />
+        <div className="h-44 rounded-lg bg-slate-100" />
+      </div>
+    </div>
   );
 }

@@ -1,11 +1,13 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import type { UserRole } from "@clinic/shared";
+import { FormEvent, useState } from "react";
 import type { AppointmentDto, DoctorDto, PatientDto } from "@/lib/api-client";
 import { apiClient, ApiClientError } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
 import { formatDateInput, formatDateTime, formatTimeInput } from "@/lib/datetime";
+import { prependItem, removeItem, replaceItem } from "@/lib/optimistic-list";
 import { canPermanentlyDelete } from "@/lib/roles";
+import { useLiveRevalidation } from "@/lib/use-live-revalidation";
 
 type AppointmentFormState = {
   patientId: string;
@@ -23,28 +25,44 @@ const emptyForm: AppointmentFormState = {
   reason: ""
 };
 
+type AppointmentPageData = {
+  appointments: AppointmentDto[];
+  doctors: DoctorDto[];
+  patients: PatientDto[];
+};
+
 export default function AppointmentsPage() {
+  const user = useAuth();
   const [appointments, setAppointments] = useState<AppointmentDto[]>([]);
   const [doctors, setDoctors] = useState<DoctorDto[]>([]);
   const [patients, setPatients] = useState<PatientDto[]>([]);
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [role, setRole] = useState<UserRole | undefined>();
+  const [pendingId, setPendingId] = useState<string | null>(null);
   const [editingAppointmentId, setEditingAppointmentId] = useState<string | null>(null);
   const [formState, setFormState] = useState<AppointmentFormState>(emptyForm);
 
-  async function load() {
-    const [appointmentResult, doctorResult, patientResult, me] = await Promise.all([
-      apiClient.appointments(),
-      apiClient.doctors(),
-      apiClient.patients(),
-      apiClient.me().catch(() => null)
-    ]);
-    setAppointments(appointmentResult.items);
-    setDoctors(doctorResult.items.filter((item) => item.isActive));
-    setPatients(patientResult.items.filter((item) => item.isActive));
-    if (me) setRole(me.user.role);
-  }
+  const { isInitialLoading, revalidate } = useLiveRevalidation<AppointmentPageData>({
+    load: async () => {
+      const [appointmentResult, doctorResult, patientResult] = await Promise.all([
+        apiClient.appointments(),
+        apiClient.doctors(),
+        apiClient.patients()
+      ]);
+      return {
+        appointments: appointmentResult.items,
+        doctors: doctorResult.items.filter((item) => item.isActive),
+        patients: patientResult.items.filter((item) => item.isActive)
+      };
+    },
+    onData: (data) => {
+      setAppointments(data.appointments);
+      setDoctors(data.doctors);
+      setPatients(data.patients);
+    },
+    onError: (caught) => setMessage(caught instanceof ApiClientError ? caught.message : "تعذر تحميل المواعيد"),
+    deps: []
+  });
 
   function updateField(name: keyof AppointmentFormState, value: string) {
     setFormState((current) => ({ ...current, [name]: value }));
@@ -70,52 +88,61 @@ export default function AppointmentsPage() {
 
   async function cancelAppointment(appointment: AppointmentDto) {
     if (!window.confirm("هل أنت متأكد من إلغاء الموعد؟")) return;
+    const previous = appointments;
     setMessage("");
+    setPendingId(appointment.id);
+    setAppointments((current) => replaceItem(current, { ...appointment, status: "CANCELLED" }));
     try {
-      await apiClient.cancelAppointment(appointment.id);
+      const result = await apiClient.cancelAppointment(appointment.id);
+      setAppointments((current) => replaceItem(current, result.appointment));
       setMessage("تم إلغاء الموعد");
-      await load();
+      void revalidate();
     } catch (caught) {
+      setAppointments(previous);
       setMessage(caught instanceof ApiClientError ? caught.message : "تعذر إلغاء الموعد");
+    } finally {
+      setPendingId(null);
     }
   }
 
   async function deleteAppointment(appointment: AppointmentDto) {
     if (!window.confirm("هل أنت متأكد من حذف الموعد نهائياً؟ لا يمكن التراجع عن هذا الإجراء.")) return;
+    const previous = appointments;
     setMessage("");
+    setPendingId(appointment.id);
+    setAppointments((current) => removeItem(current, appointment.id));
     try {
       await apiClient.deleteAppointment(appointment.id);
       setMessage("تم حذف الموعد نهائياً");
-      await load();
+      void revalidate();
     } catch (caught) {
+      setAppointments(previous);
       setMessage(caught instanceof ApiClientError ? caught.message : "تعذر حذف الموعد");
+    } finally {
+      setPendingId(null);
     }
   }
-
-  useEffect(() => {
-    void load();
-  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isSubmitting) return;
-    const formElement = event.currentTarget;
     setMessage("");
     setIsSubmitting(true);
     try {
       if (editingAppointmentId) {
-        await apiClient.updateAppointment(editingAppointmentId, formState);
+        const result = await apiClient.updateAppointment(editingAppointmentId, formState);
+        setAppointments((current) => replaceItem(current, result.appointment));
         setMessage("تم حفظ التغييرات");
       } else {
-        await apiClient.createAppointment(formState);
+        const result = await apiClient.createAppointment(formState);
+        setAppointments((current) => prependItem(current, result.appointment));
         setMessage("تم إنشاء الموعد");
       }
-      formElement.reset();
       setEditingAppointmentId(null);
       setFormState(emptyForm);
-      await load();
+      void revalidate();
     } catch (error) {
-      setMessage(error instanceof ApiClientError ? error.message : "تعذر الاتصال بالخادم. تأكد من تشغيل الواجهة الخلفية ثم حاول مرة أخرى.");
+      setMessage(error instanceof ApiClientError ? error.message : "تعذر حفظ الموعد");
     } finally {
       setIsSubmitting(false);
     }
@@ -153,19 +180,20 @@ export default function AppointmentsPage() {
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-950">المواعيد</h2>
         <div className="mt-4 space-y-3">
-          {appointments.length === 0 ? <p className="text-sm text-slate-500">لا توجد مواعيد بعد</p> : null}
+          {isInitialLoading ? <p className="rounded-md bg-slate-100 p-4 text-sm text-slate-500">جار تحميل المواعيد...</p> : null}
+          {!isInitialLoading && appointments.length === 0 ? <p className="text-sm text-slate-500">لا توجد مواعيد بعد</p> : null}
           {appointments.map((appointment) => (
             <article key={appointment.id} className="rounded-md border border-slate-100 bg-slate-50 p-4">
               <p className="font-semibold text-slate-950">{appointment.patient.firstName} {appointment.patient.lastName}</p>
               <p className="mt-1 text-sm text-slate-600">مع الدكتور {appointment.doctor.fullName} - {formatDateTime(appointment.startAt)}</p>
               {appointment.reason ? <p className="mt-1 text-xs text-slate-500">{appointment.reason}</p> : null}
               <div className="mt-3 flex flex-wrap gap-2">
-                <button onClick={() => startEditingAppointment(appointment)} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm">تغيير الموعد</button>
+                <button disabled={pendingId === appointment.id} onClick={() => startEditingAppointment(appointment)} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm disabled:opacity-50">تغيير الموعد</button>
                 {appointment.status !== "CANCELLED" ? (
-                  <button onClick={() => void cancelAppointment(appointment)} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm">إلغاء الموعد</button>
+                  <button disabled={pendingId === appointment.id} onClick={() => void cancelAppointment(appointment)} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm disabled:opacity-50">إلغاء الموعد</button>
                 ) : null}
-                {canPermanentlyDelete(role) ? (
-                  <button onClick={() => void deleteAppointment(appointment)} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm text-red-700">حذف نهائي</button>
+                {canPermanentlyDelete(user.role) ? (
+                  <button disabled={pendingId === appointment.id} onClick={() => void deleteAppointment(appointment)} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm text-red-700 disabled:opacity-50">حذف نهائي</button>
                 ) : null}
               </div>
             </article>

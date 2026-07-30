@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Bell, CalendarDays, LayoutDashboard, Menu, Settings, Stethoscope, UserRound, UsersRound, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { AuthenticatedUser } from "@clinic/shared";
+import { AuthProvider } from "@/lib/auth-context";
 import { apiClient, ApiClientError } from "@/lib/api-client";
 import { roleLabels } from "@/lib/roles";
 import { cn } from "@/lib/utils";
@@ -109,7 +110,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
-        <main className="px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+        <AuthProvider user={user}>
+          <main className="px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+        </AuthProvider>
       </div>
     </div>
   );

@@ -1,43 +1,45 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { UserRole } from "@clinic/shared";
+import { useState } from "react";
 import type { NotificationDto } from "@/lib/api-client";
 import { apiClient, ApiClientError } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
 import { formatDateTime } from "@/lib/datetime";
+import { removeItem, replaceItem } from "@/lib/optimistic-list";
 import { canPermanentlyDelete } from "@/lib/roles";
+import { useLiveRevalidation } from "@/lib/use-live-revalidation";
 
 export default function NotificationsPage() {
+  const user = useAuth();
   const [items, setItems] = useState<NotificationDto[]>([]);
   const [error, setError] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [isMarkingAll, setIsMarkingAll] = useState(false);
   const [isDeletingRead, setIsDeletingRead] = useState(false);
-  const [role, setRole] = useState<UserRole | undefined>();
 
-  async function load() {
-    setError("");
-    try {
-      const [result, me] = await Promise.all([apiClient.notifications(), apiClient.me().catch(() => null)]);
+  const { isInitialLoading, revalidate } = useLiveRevalidation({
+    load: () => apiClient.notifications(),
+    onData: (result) => {
       setItems(result.items);
-      if (me) setRole(me.user.role);
-    } catch (caught) {
-      setError(caught instanceof ApiClientError ? caught.message : "تعذر تحميل التذكيرات");
-    }
-  }
-
-  useEffect(() => {
-    void load();
-  }, []);
+      setError("");
+    },
+    onError: (caught) => setError(caught instanceof ApiClientError ? caught.message : "تعذر تحميل التذكيرات"),
+    deps: []
+  });
 
   async function markRead(id: string) {
     if (pendingId) return;
+    const previous = items;
     setError("");
     setPendingId(id);
+    const now = new Date().toISOString();
+    setItems((current) => replaceItem(current, { ...current.find((item) => item.id === id)!, readAt: now }));
     try {
-      await apiClient.markNotificationRead(id);
-      await load();
+      const result = await apiClient.markNotificationRead(id);
+      setItems((current) => replaceItem(current, result.notification));
+      void revalidate();
     } catch (caught) {
+      setItems(previous);
       setError(caught instanceof ApiClientError ? caught.message : "تعذر تعليم التذكير كمقروء");
     } finally {
       setPendingId(null);
@@ -46,12 +48,16 @@ export default function NotificationsPage() {
 
   async function markAllRead() {
     if (isMarkingAll) return;
+    const previous = items;
     setError("");
     setIsMarkingAll(true);
+    const now = new Date().toISOString();
+    setItems((current) => current.map((item) => ({ ...item, readAt: item.readAt ?? now })));
     try {
       await apiClient.markAllNotificationsRead();
-      await load();
+      void revalidate();
     } catch (caught) {
+      setItems(previous);
       setError(caught instanceof ApiClientError ? caught.message : "تعذر تعليم التذكيرات كمقروءة");
     } finally {
       setIsMarkingAll(false);
@@ -60,12 +66,15 @@ export default function NotificationsPage() {
 
   async function deleteNotification(id: string) {
     if (!window.confirm("هل أنت متأكد من حذف الإشعار؟ لا يمكن التراجع عن هذا الإجراء.")) return;
+    const previous = items;
     setError("");
     setPendingId(id);
+    setItems((current) => removeItem(current, id));
     try {
       await apiClient.deleteNotification(id);
-      await load();
+      void revalidate();
     } catch (caught) {
+      setItems(previous);
       setError(caught instanceof ApiClientError ? caught.message : "تعذر حذف الإشعار");
     } finally {
       setPendingId(null);
@@ -74,12 +83,15 @@ export default function NotificationsPage() {
 
   async function deleteReadNotifications() {
     if (!window.confirm("هل أنت متأكد من حذف الإشعارات المقروءة؟ لا يمكن التراجع عن هذا الإجراء.")) return;
+    const previous = items;
     setError("");
     setIsDeletingRead(true);
+    setItems((current) => current.filter((item) => !item.readAt));
     try {
       await apiClient.deleteReadNotifications();
-      await load();
+      void revalidate();
     } catch (caught) {
+      setItems(previous);
       setError(caught instanceof ApiClientError ? caught.message : "تعذر حذف الإشعارات المقروءة");
     } finally {
       setIsDeletingRead(false);
@@ -94,7 +106,7 @@ export default function NotificationsPage() {
           <button disabled={isMarkingAll} onClick={() => void markAllRead()} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400">
             {isMarkingAll ? "جار التعليم..." : "تعليم الكل كمقروء"}
           </button>
-          {canPermanentlyDelete(role) ? (
+          {canPermanentlyDelete(user.role) ? (
             <button disabled={isDeletingRead} onClick={() => void deleteReadNotifications()} className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400">
               {isDeletingRead ? "جار الحذف..." : "حذف الإشعارات المقروءة"}
             </button>
@@ -103,7 +115,8 @@ export default function NotificationsPage() {
       </div>
       {error ? <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       <div className="mt-5 space-y-3">
-        {items.length === 0 ? <p className="text-sm text-slate-500">لا توجد تذكيرات</p> : null}
+        {isInitialLoading ? <p className="rounded-md bg-slate-100 p-4 text-sm text-slate-500">جار تحميل التذكيرات...</p> : null}
+        {!isInitialLoading && items.length === 0 ? <p className="text-sm text-slate-500">لا توجد تذكيرات</p> : null}
         {items.map((item) => (
           <article key={item.id} className={item.readAt ? "rounded-md border border-slate-100 bg-slate-50 p-4" : "rounded-md border border-clinic-100 bg-clinic-50 p-4"}>
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -117,7 +130,7 @@ export default function NotificationsPage() {
                   {pendingId === item.id ? "جار التعليم..." : "مقروء"}
                 </button>
               ) : null}
-              {canPermanentlyDelete(role) ? (
+              {canPermanentlyDelete(user.role) ? (
                 <button disabled={pendingId === item.id || isDeletingRead} onClick={() => void deleteNotification(item.id)} className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm text-red-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400">حذف</button>
               ) : null}
             </div>

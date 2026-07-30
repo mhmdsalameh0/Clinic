@@ -25,7 +25,9 @@ function apiTargetUrl(path: string[], request: Request) {
   const incomingPath = `/${path.join("/")}`;
   const pathname = target.endsWith("/api/v1") && incomingPath.startsWith("/api/v1")
     ? `${target}${incomingPath.slice("/api/v1".length)}`
-    : `${target}${incomingPath}`;
+    : target.endsWith("/api") && incomingPath.startsWith("/api/v1")
+      ? `${target}${incomingPath.slice("/api".length)}`
+      : `${target}${incomingPath}`;
 
   return `${pathname}${new URL(request.url).search}`;
 }
@@ -49,6 +51,7 @@ async function proxy(request: Request, context: RouteContext) {
   const responseHeaders = new Headers(response.headers);
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");
+  responseHeaders.set("Cache-Control", "private, no-store, max-age=0");
 
   return new Response(response.body, {
     status: response.status,

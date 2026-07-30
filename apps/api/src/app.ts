@@ -10,6 +10,7 @@ import { prismaPlugin } from "./plugins/prisma.js";
 import { registerAppointmentRoutes } from "./modules/appointments/appointments.routes.js";
 import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
 import { registerClinicRoutes } from "./modules/clinics/clinic.routes.js";
+import { registerDashboardRoutes } from "./modules/dashboard/dashboard.routes.js";
 import { registerDoctorRoutes } from "./modules/doctors/doctors.routes.js";
 import { registerHealthRoutes } from "./modules/health/health.routes.js";
 import { registerNotificationRoutes } from "./modules/notifications/notifications.routes.js";
@@ -36,6 +37,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.setErrorHandler(errorHandler);
+  app.addHook("onResponse", async (request, reply) => {
+    if (appEnv.NODE_ENV !== "test") {
+      app.log.info({
+        method: request.method,
+        url: request.routeOptions.url ?? request.url.split("?")[0],
+        statusCode: reply.statusCode,
+        durationMs: Math.round(reply.elapsedTime)
+      }, "request duration");
+    }
+  });
 
   await app.register(helmet);
   await app.register(cookie, {
@@ -61,6 +72,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerHealthRoutes(app, { env: appEnv });
   await registerAuthRoutes(app, { env: appEnv });
   await registerClinicRoutes(app);
+  await registerDashboardRoutes(app);
   await registerUserRoutes(app);
   await registerDoctorRoutes(app);
   await registerPatientRoutes(app);

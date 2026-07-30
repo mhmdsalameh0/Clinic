@@ -3,10 +3,10 @@ import type {
   BootstrapInput,
   ChangePasswordInput,
   ClinicSettings,
-  CreateUserInput,
   CreateAppointmentInput,
   CreateDoctorInput,
   CreatePatientInput,
+  CreateUserInput,
   LoginInput,
   Paginated,
   ResetPasswordInput,
@@ -17,6 +17,7 @@ import type {
 } from "@clinic/shared";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const REQUEST_TIMEOUT_MS = 8000;
 
 type ApiEnvelope<T> = {
   data: T;
@@ -95,6 +96,13 @@ export type ReminderDto = {
   } | null;
 };
 
+export type DashboardSummaryDto = {
+  today: AppointmentDto[];
+  tomorrow: AppointmentDto[];
+  nextAppointment: AppointmentDto | null;
+  unreadNotificationCount: number;
+};
+
 export type DemoCleanupResult = {
   notifications: number;
   reminders: number;
@@ -104,18 +112,28 @@ export type DemoCleanupResult = {
 };
 
 async function request<T>(path: string, init: RequestInit = {}) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response: Response;
+
   try {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
       credentials: "include",
+      cache: "no-store",
+      signal: init.signal ?? controller.signal,
       headers: {
         "Content-Type": "application/json",
         ...init.headers
       }
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiClientError("استغرق الطلب وقتاً طويلاً. حاول مرة أخرى.", 0, "REQUEST_TIMEOUT");
+    }
     throw new ApiClientError("تعذر الاتصال بالخادم", 0, "NETWORK_ERROR");
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 
   const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | ApiErrorEnvelope | null;
@@ -192,6 +210,7 @@ export const apiClient = {
   deactivatePatient: (id: string) => request<{ patient: PatientDto }>(`/patients/${id}/deactivate`, { method: "POST" }),
   deletePatient: (id: string) => request<{ ok: boolean }>(`/patients/${id}`, { method: "DELETE" }),
   appointments: (query = "") => request<Paginated<AppointmentDto>>(`/appointments${query}`),
+  dashboardSummary: () => request<DashboardSummaryDto>("/dashboard/summary"),
   todayAppointments: () => request<{ items: AppointmentDto[] }>("/appointments/today"),
   tomorrowAppointments: () => request<{ items: AppointmentDto[] }>("/appointments/tomorrow"),
   nextAppointment: () => request<{ appointment: AppointmentDto | null }>("/appointments/next"),
