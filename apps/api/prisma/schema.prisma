@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  CLINIC_ADMIN
+  DOCTOR
+  RECEPTIONIST
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum ReminderStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum ReminderType {
+  APPOINTMENT_24_HOURS
+  TOMORROW_APPOINTMENTS_SUMMARY
+}
+
+enum NotificationType {
+  APPOINTMENT_REMINDER
+  TOMORROW_SUMMARY
+  APPOINTMENT_CREATED
+  APPOINTMENT_UPDATED
+  APPOINTMENT_CANCELLED
+  SYSTEM
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+model Clinic {
+  id                                String         @id @default(cuid())
+  name                              String
+  phone                             String?
+  email                             String?
+  address                           String?
+  timezone                          String         @default("Asia/Beirut")
+  appointmentDefaultDurationMinutes Int            @default(30)
+  isActive                          Boolean        @default(true)
+  createdAt                         DateTime       @default(now())
+  updatedAt                         DateTime       @updatedAt
+  users                             User[]
+  doctors                           Doctor[]
+  patients                          Patient[]
+  appointments                      Appointment[]
+  reminders                         Reminder[]
+  notifications                     Notification[]
+  auditLogs                         AuditLog[]
+
+  @@index([name])
+}
+
+model User {
+  id              String           @id @default(cuid())
+  clinicId        String
+  fullName        String
+  email           String
+  phone           String?
+  passwordHash    String
+  role            UserRole
+  isActive        Boolean          @default(true)
+  lastLoginAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  clinic          Clinic           @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  doctorProfile   Doctor?
+  appointments    Appointment[]    @relation("AppointmentCreatedBy")
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  refreshSessions RefreshSession[]
+
+  @@unique([clinicId, email])
+  @@index([clinicId])
+  @@index([email])
+  @@index([role])
+}
+
+model RefreshSession {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  userAgent String?
+  ipAddress String?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model Doctor {
+  id                         String        @id @default(cuid())
+  clinicId                   String
+  userId                     String?       @unique
+  fullName                   String
+  specialty                  String?
+  phone                      String?
+  email                      String?
+  appointmentDurationMinutes Int?
+  isActive                   Boolean       @default(true)
+  createdAt                  DateTime      @default(now())
+  updatedAt                  DateTime      @updatedAt
+  clinic                     Clinic        @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  user                       User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  appointments               Appointment[]
+
+  @@unique([clinicId, email])
+  @@index([clinicId])
+  @@index([fullName])
+}
+
+model Patient {
+  id             String        @id @default(cuid())
+  clinicId       String
+  firstName      String
+  lastName       String
+  phone          String
+  alternatePhone String?
+  email          String?
+  dateOfBirth    DateTime?
+  gender         String?
+  notes          String?
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  clinic         Clinic        @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  appointments   Appointment[]
+
+  @@index([clinicId])
+  @@index([phone])
+  @@index([lastName, firstName])
+}
+
+model Appointment {
+  id                 String            @id @default(cuid())
+  clinicId           String
+  doctorId           String
+  patientId          String
+  createdByUserId    String
+  startAt            DateTime
+  endAt              DateTime
+  durationMinutes    Int?
+  status             AppointmentStatus @default(SCHEDULED)
+  reason             String?
+  internalNotes      String?
+  cancellationReason String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  clinic             Clinic            @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  doctor             Doctor            @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  patient            Patient           @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  createdBy          User              @relation("AppointmentCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  reminders          Reminder[]
+  notifications      Notification[]
+
+  @@index([clinicId])
+  @@index([doctorId])
+  @@index([patientId])
+  @@index([startAt])
+  @@index([clinicId, startAt, status])
+  @@index([clinicId, doctorId, startAt])
+  @@index([clinicId, doctorId, startAt, endAt])
+  @@index([clinicId, patientId, startAt])
+}
+
+model Reminder {
+  id                  String              @id @default(cuid())
+  clinicId            String
+  appointmentId       String?
+  type                ReminderType
+  channel             NotificationChannel @default(IN_APP)
+  status              ReminderStatus      @default(PENDING)
+  scheduledFor        DateTime
+  processingStartedAt DateTime?
+  sentAt              DateTime?
+  failedAt            DateTime?
+  errorMessage        String?
+  attemptCount        Int                 @default(0)
+  idempotencyKey      String              @unique
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  clinic              Clinic              @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  appointment         Appointment?        @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([appointmentId])
+  @@index([status, scheduledFor])
+  @@index([clinicId, status, scheduledFor])
+}
+
+model Notification {
+  id            String           @id @default(cuid())
+  clinicId      String
+  userId        String
+  appointmentId String?
+  type          NotificationType
+  title         String
+  message       String
+  readAt        DateTime?
+  createdAt     DateTime         @default(now())
+  clinic        Clinic           @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointment   Appointment?     @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([userId, readAt])
+  @@index([appointmentId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  clinicId   String?
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  clinic     Clinic?  @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
