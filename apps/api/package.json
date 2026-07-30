@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "npm --prefix ../../packages/shared run build && tsc -p tsconfig.json",
+    "build": "npm --prefix ../../packages/shared run build && npm run prisma:generate && tsc -p tsconfig.json",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "prisma": "prisma"
+    "prisma": "prisma",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma"
   },
   "dependencies": {
     "@clinic/shared": "file:../../packages/shared",
